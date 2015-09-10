@@ -33,6 +33,7 @@ public class ZoomRootView
 	private static final int MODE_SCROLL = 3;
 
 	private float scaleFactor = 1.f;
+	private float preDefScaleFactor = 1.f;
 	private float lastTouchX;
 	private float lastTouchY;
 	private float posX;
@@ -43,6 +44,8 @@ public class ZoomRootView
 	private int mode;
 	private int scroll;
 	private boolean setDragClick = false;
+	private boolean preScaleDetect = false;
+	private boolean zoomLock = false;
 
 	private int activePointerId = INVALID_POINTER_ID;
 	private ViewGroup mMainView;
@@ -51,25 +54,47 @@ public class ZoomRootView
 	private RectF previousZoomBox;
 	private ScaleGestureDetector scaleGestureDetector;
 	private GestureDetector gestureDetector;
-    private ZoomEventListener zoomEventListener;
+	private ZoomEventListener zoomEventListener;
+	private static ZoomRootView currentZoomRootView;
+
+	static
+	{
+		currentZoomRootView = null;
+	}
 
 	private ZoomRootView(Context context, View rootView, ZoomEventListener zoomEventListener)
 	{
 		mMainView = (ViewGroup) rootView;
 		scaleGestureDetector = new ScaleGestureDetector(context, new ScaleListener());
 		gestureDetector = new GestureDetector(context, new GestureListener());
-        this.zoomEventListener = zoomEventListener;
+		this.zoomEventListener = zoomEventListener;
+		currentZoomRootView = this;
 		originalBox = new Rect();
 	}
 
-    public ZoomEventListener getZoomEventListener(){
-        return zoomEventListener;
-    }
+	public ZoomEventListener getZoomEventListener()
+	{
+		return zoomEventListener;
+	}
+
 	public static ZoomRootView createZoomRootView(Context context, View rootView, ZoomEventListener zoomEventListener)
 	{
 		if (context == null || rootView == null || zoomEventListener == null) return null;
-		return new ZoomRootView(context, rootView,zoomEventListener);
+		return new ZoomRootView(context, rootView, zoomEventListener);
 	}
+
+	public static ZoomRootView getCurrentZoomRootView()
+	{
+		return currentZoomRootView;
+	}
+
+	public ViewGroup getCurrentRootView()
+	{
+		return mMainView;
+	}
+
+
+
 
 	public void setPanSensitivity(final float panSensitivity)
 	{
@@ -86,6 +111,13 @@ public class ZoomRootView
 			return panSensitivity;
 	}
 
+	private void reCenterView()
+	{
+		posY = FLOAT_ZERO;
+		posX = FLOAT_ZERO;
+		mMainView.scrollTo(0, 0);
+	}
+
 	private class ScaleListener extends ScaleGestureDetector.SimpleOnScaleGestureListener
 	{
 
@@ -93,16 +125,14 @@ public class ZoomRootView
 		{
 			scaleFactor *= detector.getScaleFactor();
 
-			scaleFactor = (scaleFactor < MIN_ZOOM ? MIN_ZOOM : scaleFactor); // prevent our view from becoming too small //
+			scaleFactor = (scaleFactor < getMinZoom() ? getMinZoom() : scaleFactor); // prevent our view from becoming too small //
 
-			if (scaleFactor == MIN_ZOOM)
+			if (scaleFactor == getMinZoom())
 			{
-				posY = FLOAT_ZERO;
-				posX = FLOAT_ZERO;
-				mMainView.scrollTo(0, 0);
+				reCenterView();
 			}
 
-			scaleFactor = (scaleFactor > MAX_ZOOM ? MAX_ZOOM : scaleFactor); // prevent our view from becoming too large //
+			scaleFactor = (scaleFactor > getMaxZoom() ? getMaxZoom() : scaleFactor); // prevent our view from becoming too large //
 			scaleFactor = ((float) ((int) (scaleFactor * 100))) / 100; // Change precision to help with jitter when user just rests their fingers //
 
 			mMainView.setScaleX(scaleFactor);
@@ -117,34 +147,33 @@ public class ZoomRootView
 		@Override
 		public boolean onDoubleTapEvent(MotionEvent motionEvent)
 		{
-			if (scaleFactor > MIN_ZOOM) setPredefinedScale(MIN_ZOOM);
+			if (scaleFactor > getMinZoom()) setPredefinedScale(getMinZoom());
 			return true;
 		}
 	}
 
 	public interface ZoomEventListener
 	{
-        public boolean onDispatchTouchListener(MotionEvent motionEvent);
+		public boolean onDispatchTouchListener(MotionEvent motionEvent);
 	}
 
-
-    public boolean dispatchTouchWrapper(ZoomEventListener zoomEventListener,MotionEvent motionEvent)
-    {
-        if (zoomEventListener != null)
-        {
-            if (!dispatchTouchEvent(motionEvent))
-                return zoomEventListener.onDispatchTouchListener(motionEvent);
-            else
-                return true;
-        }
-        else
-            return zoomEventListener.onDispatchTouchListener(motionEvent);
-    }
+	public static boolean dispatchTouchWrapper(ZoomRootView zoomRootView,ZoomEventListener zoomEventListener, MotionEvent motionEvent)
+	{
+		if (zoomEventListener != null && zoomRootView != null)
+		{
+			if (!zoomRootView.dispatchTouchEvent(motionEvent))
+				return zoomEventListener.onDispatchTouchListener(motionEvent);
+			else
+				return true;
+		}
+		else
+			return zoomEventListener.onDispatchTouchListener(motionEvent);
+	}
 
 	public boolean dispatchTouchEvent(MotionEvent motionEvent)
 	{
 
-		if ( motionEvent == null)
+		if (motionEvent == null)
 		{
 			return false;
 		}
@@ -213,160 +242,28 @@ public class ZoomRootView
 				float xx = motionEvent.getX(pointerIndex);
 				float yy = motionEvent.getY(pointerIndex);
 
-				if (mode == MODE_ZOOM)
+				preScaleInit();
+
+				if (mode == MODE_ZOOM && !getZoomLock())
 				{
-
-					mMainView.getDrawingRect(originalBox);
-
-					Matrix m = mMainView.getMatrix();
-
-					zoomBox = new RectF(originalBox);
-
-					m.mapRect(zoomBox);
-
-					if (previousZoomBox != null && (zoomBox.width() < previousZoomBox.width()))
-					{
-						float xLeak = (float) (previousZoomBox.width() - zoomBox.width()) / 2f;
-						float yLeak = (float) (previousZoomBox.height() - zoomBox.height()) / 2f;
-
-						if (posX == FLOAT_ZERO)
-						{
-							xLeak = FLOAT_ZERO;
-						}
-
-						if (posY == FLOAT_ZERO)
-						{
-							yLeak = FLOAT_ZERO;
-						}
-
-						if (posX > FLOAT_ZERO)
-						{
-							xLeak = (-1) * xLeak;
-							posX = posX + xLeak;
-							if (posX < FLOAT_ZERO)
-							{
-								xLeak = xLeak - posX;
-								posX = FLOAT_ZERO;
-							}
-						}
-
-						if (posX < FLOAT_ZERO)
-						{
-
-							posX = posX + xLeak;
-							if (posX > FLOAT_ZERO)
-							{
-								xLeak = xLeak - posX;
-								posX = FLOAT_ZERO;
-							}
-						}
-
-						if (posY > FLOAT_ZERO)
-						{
-							yLeak = (-1) * yLeak;
-							posY = posY + yLeak;
-							if (posY < FLOAT_ZERO)
-							{
-								yLeak = yLeak - posY;
-								posY = FLOAT_ZERO;
-							}
-						}
-
-						if (posY < FLOAT_ZERO)
-						{
-
-							posY = posY + yLeak;
-							if (posY > FLOAT_ZERO)
-							{
-								yLeak = yLeak - posY;
-								posY = FLOAT_ZERO;
-							}
-						}
-						mMainView.scrollBy((int) xLeak, (int) yLeak);
-					}
-
-					scaledDiffY = (zoomBox.height() - originalBox.height()) / 2;
-					scaledDiffX = (zoomBox.width() - originalBox.width()) / 2;
-
-					previousZoomBox = zoomBox;
-
+					zoomAdjust();
 				}
 
 				// DRAG works
 				if (mode == MODE_DRAG)
 				{
-
 					if (scaledDiffY == FLOAT_ZERO || scaledDiffX == FLOAT_ZERO) break;
 
 					float dx = (float) (lastTouchX - xx) / PAN_SENSITIVITY;
 					float dy = (float) (lastTouchY - yy) / PAN_SENSITIVITY;
 
-					if (Math.abs(posX) < scaledDiffX) posX = posX + dx;
-					if (Math.abs(posY) < scaledDiffY) posY = posY + dy;
-
-					if (Math.abs(posX) >= scaledDiffX)
-					{
-
-						if ((Math.abs(posX) == scaledDiffX && posX > FLOAT_ZERO && dx < FLOAT_ZERO) || (Math.abs(posX) == scaledDiffX && posX < FLOAT_ZERO && dx > FLOAT_ZERO)) posX += dx;
-
-						if (Math.abs(posX) == scaledDiffX)
-						{
-							dx = FLOAT_ZERO;
-						}
-
-						if (Math.abs(posX) > scaledDiffX)
-						{
-							if (posX > FLOAT_ZERO)
-							{
-								float x = dx - (posX - scaledDiffX);
-								dx = x;
-								posX = scaledDiffX;
-							}
-							else
-							{
-								float x = dx - (posX + scaledDiffX);
-								dx = x;
-								posX = (-1) * scaledDiffX;
-							}
-						}
-
-					}
-
-					if (Math.abs(posY) >= scaledDiffY)
-					{
-
-						if ((Math.abs(posY) == scaledDiffY && posY > FLOAT_ZERO && dy < FLOAT_ZERO) || (Math.abs(posY) == scaledDiffY && posY < FLOAT_ZERO && dy > FLOAT_ZERO)) posY += dy;
-
-						if (Math.abs(posY) == scaledDiffY)
-						{
-							dy = FLOAT_ZERO;
-						}
-
-						if (Math.abs(posY) > scaledDiffY)
-						{
-							if (posY > FLOAT_ZERO)
-							{
-								float y = dy - (posY - scaledDiffY);
-								dy = y;
-								posY = scaledDiffY;
-							}
-							else
-							{
-								float y = dy - (posY + scaledDiffY);
-								dy = y;
-								posY = (-1) * scaledDiffY;
-							}
-						}
-					}
-
-					mMainView.scrollBy((int) dx, (int) dy);
-
+					dragAdjust(dx, dy);
 				}
 			}
 				break;
 		}
 
-		if (mode == MODE_ZOOM)
+		if (mode == MODE_ZOOM && !getZoomLock())
 		{
 			scaleGestureDetector.onTouchEvent(motionEvent);
 			return true;
@@ -376,26 +273,200 @@ public class ZoomRootView
 		return false;
 	}
 
+	private void zoomAdjust()
+	{
+		mMainView.getDrawingRect(originalBox);
+
+		Matrix m = mMainView.getMatrix();
+
+		zoomBox = new RectF(originalBox);
+
+		m.mapRect(zoomBox);
+
+		if (previousZoomBox != null && (zoomBox.width() < previousZoomBox.width()))
+		{
+			float xLeak = (float) (previousZoomBox.width() - zoomBox.width()) / 2f;
+			float yLeak = (float) (previousZoomBox.height() - zoomBox.height()) / 2f;
+
+			if (posX == FLOAT_ZERO)
+			{
+				xLeak = FLOAT_ZERO;
+			}
+
+			if (posY == FLOAT_ZERO)
+			{
+				yLeak = FLOAT_ZERO;
+			}
+
+			if (posX > FLOAT_ZERO)
+			{
+				xLeak = (-1) * xLeak;
+				posX = posX + xLeak;
+				if (posX < FLOAT_ZERO)
+				{
+					xLeak = xLeak - posX;
+					posX = FLOAT_ZERO;
+				}
+			}
+
+			if (posX < FLOAT_ZERO)
+			{
+
+				posX = posX + xLeak;
+				if (posX > FLOAT_ZERO)
+				{
+					xLeak = xLeak - posX;
+					posX = FLOAT_ZERO;
+				}
+			}
+
+			if (posY > FLOAT_ZERO)
+			{
+				yLeak = (-1) * yLeak;
+				posY = posY + yLeak;
+				if (posY < FLOAT_ZERO)
+				{
+					yLeak = yLeak - posY;
+					posY = FLOAT_ZERO;
+				}
+			}
+
+			if (posY < FLOAT_ZERO)
+			{
+
+				posY = posY + yLeak;
+				if (posY > FLOAT_ZERO)
+				{
+					yLeak = yLeak - posY;
+					posY = FLOAT_ZERO;
+				}
+			}
+
+
+
+			mMainView.scrollBy((int) xLeak, (int) yLeak);
+
+		}
+
+		scaledDiffY = (zoomBox.height() - originalBox.height()) / 2;
+		scaledDiffX = (zoomBox.width() - originalBox.width()) / 2;
+
+		previousZoomBox = zoomBox;
+	}
+
+	private void dragAdjust(float dx, float dy)
+	{
+		if (Math.abs(posX) < scaledDiffX) posX = posX + dx;
+		if (Math.abs(posY) < scaledDiffY) posY = posY + dy;
+
+		if (Math.abs(posX) >= scaledDiffX)
+		{
+
+			if ((Math.abs(posX) == scaledDiffX && posX > FLOAT_ZERO && dx < FLOAT_ZERO) || (Math.abs(posX) == scaledDiffX && posX < FLOAT_ZERO && dx > FLOAT_ZERO)) posX += dx;
+
+			if (Math.abs(posX) == scaledDiffX)
+			{
+				dx = FLOAT_ZERO;
+			}
+
+			if (Math.abs(posX) > scaledDiffX)
+			{
+				if (posX > FLOAT_ZERO)
+				{
+					float x = dx - (posX - scaledDiffX);
+					dx = x;
+					posX = scaledDiffX;
+				}
+				else
+				{
+					float x = dx - (posX + scaledDiffX);
+					dx = x;
+					posX = (-1) * scaledDiffX;
+				}
+			}
+
+		}
+
+		if (Math.abs(posY) >= scaledDiffY)
+		{
+
+			if ((Math.abs(posY) == scaledDiffY && posY > FLOAT_ZERO && dy < FLOAT_ZERO) || (Math.abs(posY) == scaledDiffY && posY < FLOAT_ZERO && dy > FLOAT_ZERO)) posY += dy;
+
+			if (Math.abs(posY) == scaledDiffY)
+			{
+				dy = FLOAT_ZERO;
+			}
+
+			if (Math.abs(posY) > scaledDiffY)
+			{
+				if (posY > FLOAT_ZERO)
+				{
+					float y = dy - (posY - scaledDiffY);
+					dy = y;
+					posY = scaledDiffY;
+				}
+				else
+				{
+					float y = dy - (posY + scaledDiffY);
+					dy = y;
+					posY = (-1) * scaledDiffY;
+				}
+			}
+		}
+
+		mMainView.scrollBy((int) dx, (int) dy);
+	}
+
 	public void setPredefinedScale(float scale)
 	{
-
 		if (scale >= MIN_ZOOM && scale <= MAX_ZOOM)
 		{
 
-			posY = FLOAT_ZERO;
-			posX = FLOAT_ZERO;
-			mMainView.scrollTo(0, 0);
+			reCenterView();
 
-			scaleFactor = scale;
+			preDefScaleFactor = scaleFactor = scale;
 
 			scaleFactor = ((float) ((int) (scaleFactor * 100))) / 100; // Change precision to help with jitter when user just rests their fingers //
 
 			mMainView.setScaleX(scaleFactor);
 			mMainView.setScaleY(scaleFactor);
+			preScaleDetect = true;
+			//setZoomLock(true);
 		}
 	}
 
-	// //this doesn't work well with Viewpagers and some scrollable views
+	private void setZoomLock(boolean zoomLock)
+	{
+		this.zoomLock = zoomLock;
+	}
+
+	private boolean getZoomLock()
+	{
+		return this.zoomLock;
+	}
+
+	private void preScaleInit()
+	{
+		if (preScaleDetect)
+		{
+			mMainView.getDrawingRect(originalBox);
+
+			Matrix m = mMainView.getMatrix();
+
+			zoomBox = new RectF(originalBox);
+
+			m.mapRect(zoomBox);
+
+			scaledDiffY = (zoomBox.height() - originalBox.height()) / 2;
+			scaledDiffX = (zoomBox.width() - originalBox.width()) / 2;
+
+			previousZoomBox = zoomBox;
+
+			preScaleDetect = false;
+		}
+	}
+
+	// Does not work correctly with scrollable view like ViewPager etc
 	public void triggerPreventDragClick(boolean setDragClick)
 	{
 		this.setDragClick = setDragClick;
@@ -403,7 +474,7 @@ public class ZoomRootView
 
 	public float getMinZoom()
 	{
-		return MIN_ZOOM;
+		return preDefScaleFactor;
 	}
 
 	public float getMaxZoom()

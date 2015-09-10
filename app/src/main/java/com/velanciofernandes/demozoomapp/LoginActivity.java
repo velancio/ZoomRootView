@@ -7,6 +7,7 @@ import android.view.ViewGroup;
 
 public class LoginActivity extends Activity implements ZoomRootView.ZoomEventListener
 {
+	float scale = 0.0f;
 
 	// UI references.
 	private ViewGroup mMainView;
@@ -28,25 +29,22 @@ public class LoginActivity extends Activity implements ZoomRootView.ZoomEventLis
 		{
 			zoomRootView.triggerPreventDragClick(true);
 		}
-
 	}
 
 	@Override
 	public boolean dispatchTouchEvent(MotionEvent motionEvent)
 	{
-        if (zoomRootView != null)
-        {
-            return zoomRootView.dispatchTouchWrapper(this, motionEvent);
-        }
-        else
-        {
-            return super.dispatchTouchEvent(motionEvent);
-        }
+       return ZoomRootView.dispatchTouchWrapper(zoomRootView,this, motionEvent);
 	}
 
 	@Override
 	public boolean onDispatchTouchListener(MotionEvent motionEvent)
 	{
 		return super.dispatchTouchEvent(motionEvent);
+	}
+
+	@Override
+	protected void onResume() {
+		super.onResume();
 	}
 }
